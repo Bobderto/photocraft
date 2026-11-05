@@ -1,5 +1,5 @@
 //! The mouse wheel on value fields (#5473, #4061): one step a notch, as the Up/Down keys (×10
-//! with Shift).
+//! with Shift). Trackpad swipes scroll the panel instead (#11353).
 //!
 //! - While a field has keyboard focus, the wheel steps it wherever the pointer is. [`begin_frame`]
 //!   takes the wheel out of the frame's input before anything is laid out, so neither the canvas
@@ -8,7 +8,7 @@
 //!   a panel being scrolled keeps scrolling when a field passes under the pointer. A gesture that
 //!   leaves the field is the view's from then on.
 
-use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
+use egui::{Context, Event, Id, MouseWheelSource, MouseWheelUnit, Rect, Ui, Vec2};
 
 /// Wheel events this close together (seconds) are one gesture.
 const GESTURE_GAP: f64 = 0.3;
@@ -41,12 +41,11 @@ fn taken_id() -> Id {
     Id::unique("pc-field-wheel-taken")
 }
 
-/// A wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a plain
-/// sideways scroll (a trackpad swipe pans the view; Shift+wheel can arrive sideways). An event
-/// with no delta at all counts: macOS starts a trackpad gesture with one, and it is what lets a
-/// field under the pointer claim the gesture.
+/// A mouse wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a
+/// plain sideways scroll. Trackpad and momentum events always stay with the panel or canvas.
+/// A zero-delta wheel event can still start a gesture on platforms with an unknown source.
 fn for_field(e: &Event) -> bool {
-    matches!(e, Event::MouseWheel { delta, modifiers, .. }
+    matches!(e, Event::MouseWheel { source: MouseWheelSource::Wheel | MouseWheelSource::Unknown, delta, modifiers, .. }
         if (delta.y != 0.0 || delta.x == 0.0 || modifiers.shift) && !modifiers.alt && !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd)
 }
 
@@ -212,6 +211,44 @@ mod tests {
     }
 
     #[test]
+    fn trackpad_scroll_over_an_unfocused_field_scrolls_the_panel() {
+        for source in [egui::MouseWheelSource::Trackpad, egui::MouseWheelSource::Momentum] {
+            let mut h = harness(100.0);
+            let at = field(&h).center();
+            h.hover_at(at);
+            h.run_steps(1);
+            h.event(egui::Event::MouseWheel {
+                source,
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -80.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(4);
+            assert_eq!(h.state().0, 100.0, "{source:?}: the hovered field must not step");
+            assert!(h.state().1 > 0.0, "{source:?}: the panel should scroll under the pointer");
+        }
+    }
+
+    #[test]
+    fn physical_mouse_wheel_still_steps_a_hovered_field() {
+        let mut h = harness(100.0);
+        let at = field(&h).center();
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Wheel,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().0, 101.0);
+        assert_eq!(h.state().1, 0.0);
+    }
+
+    #[test]
     fn a_focused_field_takes_the_wheel_wherever_the_pointer_is() {
         let mut h = harness(100.0);
         h.get_by_role(Role::SpinButton).click();
@@ -276,10 +313,10 @@ mod tests {
         }
     }
 
-    /// A trackpad gesture that macOS starts with a zero-delta event, then moves a frame later,
-    /// steps the field under the pointer.
+    /// A wheel with an unknown source may start with a zero-delta event, then move a frame
+    /// later. On platforms that cannot identify trackpads, it retains the existing wheel action.
     #[test]
-    fn a_trackpad_gesture_that_starts_with_no_delta_steps_a_hovered_field() {
+    fn an_unknown_source_gesture_that_starts_with_no_delta_steps_a_hovered_field() {
         let mut h = harness(100.0);
         h.hover_at(field(&h).center());
         h.run_steps(1);

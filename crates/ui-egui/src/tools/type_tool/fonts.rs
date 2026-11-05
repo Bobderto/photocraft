@@ -785,7 +785,7 @@ pub(crate) fn family_picker_in(
     if !open && !escape && ui.is_enabled() {
         let notches = if had_focus { f32::from(u8::from(up)) - f32::from(u8::from(down)) } else { 0.0 };
         let hovered = input.hovered() || arrow.hovered();
-        if hovered {
+        if hovered && crate::widgets::mouse_wheel_owns_smooth_scroll(ui, field.with("family-wheel")) {
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
         }
         let notches = notches + crate::widgets::wheel_notches_of(ui, field.with("family-wheel"), hovered, 1.0);

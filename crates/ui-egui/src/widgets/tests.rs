@@ -1437,6 +1437,53 @@ fn the_wheel_over_a_wheel_dropdown_does_not_scroll_its_container() {
 }
 
 #[test]
+fn trackpad_scroll_over_a_dropdown_scrolls_its_container() {
+    for source in [egui::MouseWheelSource::Trackpad, egui::MouseWheelSource::Momentum] {
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+            |ui, state: &mut (usize, f32)| {
+                let out = egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
+                    super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), &mut state.0, &MODES, 120.0);
+                    ui.add_space(400.0);
+                });
+                state.1 = out.state.clamped_offset().y;
+            },
+            (0, 0.0),
+        );
+        h.run();
+        let at = h.get_by_role(egui::accesskit::Role::ComboBox).rect().center();
+        h.hover_at(at);
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            source,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -80.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().0, 0, "{source:?}: the hovered dropdown must not change");
+        assert!(h.state().1 > 0.0, "{source:?}: the panel should scroll under the pointer");
+    }
+}
+
+#[test]
+fn physical_mouse_wheel_still_steps_a_hovered_dropdown() {
+    let mut h = mode_dropdown(true);
+    let at = h.get_by_role(egui::accesskit::Role::ComboBox).rect().center();
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Wheel,
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    assert_eq!(*h.state(), 1);
+}
+
+#[test]
 fn the_wheel_leaves_a_plain_dropdown_alone() {
     let mut h = mode_dropdown(false);
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);

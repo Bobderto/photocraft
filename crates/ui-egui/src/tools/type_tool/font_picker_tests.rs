@@ -1265,6 +1265,35 @@ fn wheel_over_the_closed_font_button_steps_through_the_families() {
 }
 
 #[test]
+fn trackpad_scroll_over_the_closed_font_button_scrolls_the_panel() {
+    let families: Vec<String> = (0..10).map(|i| format!("Family {i:02}")).collect();
+    let mut h = Harness::builder().with_size(vec2(300.0, 100.0)).build_ui_state(
+        move |ui, state: &mut (String, f32)| {
+            let out = egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
+                font_picker_in(ui, &mut state.0, 170.0, &families, FontPreview::Off, &[]);
+                ui.add_space(400.0);
+            });
+            state.1 = out.state.clamped_offset().y;
+        },
+        ("Family 00".into(), 0.0),
+    );
+    h.run();
+    let at = h.get_by_role(Role::TextInput).rect().center();
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Trackpad,
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -80.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().0, "Family 00", "the hovered font must not change");
+    assert!(h.state().1 > 0.0, "the panel should scroll under the pointer");
+}
+
+#[test]
 fn wheel_over_the_closed_button_keeps_a_stable_order_with_recents() {
     let mut h = harness_with_recents(FontPreview::Medium, vec![]);
     let button = h.query_all_by_role(Role::TextInput).next().unwrap().rect().center();

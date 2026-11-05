@@ -2,6 +2,7 @@ use super::fields::{FieldOpts, VALUE_FIELD_H, value_field_in};
 use super::panel::surface;
 use super::scrub::scrub_label_within;
 use super::{Color32, Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, vec2};
+use egui::MouseWheelSource;
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
 pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
@@ -49,7 +50,7 @@ pub(crate) fn curve_fraction(v: f32, lo: f32, hi: f32, curve: Option<f32>) -> f3
     }
 }
 
-/// Wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
+/// Mouse wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
 /// egui memory until they make whole notches (high-resolution wheels report fractions of one);
 /// smooth (point) deltas count `line_scroll_speed` points per notch, like the canvas wheel.
 fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
@@ -57,6 +58,7 @@ fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
 }
 
 /// [`wheel_notches`] of widget `id` while `hovered`, a notch with Shift counting `shift_notches`.
+/// Trackpad and momentum events leave the value alone and continue scrolling the container.
 pub(crate) fn wheel_notches_of(ui: &Ui, id: egui::Id, hovered: bool, shift_notches: f32) -> f32 {
     if !hovered {
         return 0.0;
@@ -65,12 +67,43 @@ pub(crate) fn wheel_notches_of(ui: &Ui, id: egui::Id, hovered: bool, shift_notch
         i.events
             .iter()
             .filter_map(|e| match e {
-                egui::Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, modifiers.shift)),
+                egui::Event::MouseWheel { source: MouseWheelSource::Wheel | MouseWheelSource::Unknown, unit, delta, modifiers, .. } => {
+                    Some((*unit, *delta, modifiers.shift))
+                }
                 _ => None,
             })
             .collect()
     });
     count_notches(ui, id.with("wheel-acc"), &wheel, shift_notches)
+}
+
+/// Keep egui's smoothed mouse-wheel tail out of a hovered value picker. A trackpad swipe, even
+/// over the same control immediately afterward, belongs to the containing scroll area.
+pub(crate) fn mouse_wheel_owns_smooth_scroll(ui: &Ui, id: egui::Id) -> bool {
+    const TAIL_SECONDS: f64 = 0.3;
+    let key = id.with("mouse-wheel-smooth-tail");
+    let (now, mouse, trackpad) = ui.input(|i| {
+        let mut mouse = false;
+        let mut trackpad = false;
+        for event in &i.events {
+            if let egui::Event::MouseWheel { source, .. } = event {
+                match source {
+                    MouseWheelSource::Wheel | MouseWheelSource::Unknown => mouse = true,
+                    MouseWheelSource::Trackpad | MouseWheelSource::Momentum => trackpad = true,
+                }
+            }
+        }
+        (i.time, mouse, trackpad)
+    });
+    if trackpad {
+        ui.data_mut(|d| d.remove::<f64>(key));
+        return false;
+    }
+    if mouse {
+        ui.data_mut(|d| d.insert_temp(key, now));
+        return true;
+    }
+    ui.data(|d| d.get_temp::<f64>(key)).is_some_and(|last| now - last <= TAIL_SECONDS)
 }
 
 /// Whole notches in `wheel` (unit, delta, Shift held), a notch with Shift counting

@@ -1,6 +1,6 @@
 use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
-use super::slider::wheel_notches_of;
+use super::slider::{mouse_wheel_owns_smooth_scroll, wheel_notches_of};
 use super::{Pos2, Rect, Response, Ui, Vec2, type_ahead};
 
 /// A compact labelled dropdown in the studio style.
@@ -21,7 +21,7 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
     (!chosen.is_empty(), hovered)
 }
 
-/// [`dropdown_hovered`] whose value also steps with the wheel over its button or open list: down
+/// [`dropdown_hovered`] whose value also steps with the mouse wheel over its button or open list: down
 /// picks the next option, up the previous one, one per notch (Shift too), stopping at the ends
 /// (Photoshop's Layers panel blend modes, #1747). The wheel then scrolls neither the list, which
 /// follows the value instead, nor what the dropdown is in. Returns every option chosen this frame
@@ -160,11 +160,11 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
     rests
 }
 
-/// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
+/// The options the mouse wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
 /// one per notch, in order; the last is the new `current`. While the pointer is over it the wheel
 /// scrolls nothing else.
 fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
-    if hovered {
+    if hovered && mouse_wheel_owns_smooth_scroll(ui, id) {
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
     let notches = wheel_notches_of(ui, id, hovered, 1.0);
