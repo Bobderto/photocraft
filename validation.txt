@@ -74,3 +74,27 @@ at the same screen position at 200% and 66.7% after the fix, unlike main. Inspec
 both before/after PNG pairs. Re-rendered final source: both PNGs pixel-identical to
 the attached after captures. Native desktop interaction and independent Photoshop
 comparison were not performed. The issue's unmeasured cases retain existing behavior.
+
+CodeRabbit follow-up (held temporary binding with Zoom already selected):
+The new regression fails on 4c46db620, passes with original main anchoring, and
+passes after the guard also checks hold_keys::held_tool. It covers Alt+Space,
+Zoom In and Zoom Out, animation on/off, pointer stability during and after the
+transition, retained selected tool, and no history state.
+Head: a97555e273923390240990c90ccf6e3f2fe49114
+cargo test -p photocraft-ui-egui --lib -- canvas_tool_menu spring_tools:
+64 passed, 0 failed.
+cargo test -p photocraft-ui-egui --lib -- canvas_tool_menu spring_tools hold_keys:
+103 passed, 1 failed (the already-recorded missing Arabic glyph in
+input::hold_keys::tests::space_while_editing_type_is_not_the_hand_tool).
+cargo test -p photocraft-ui-egui:
+5537 passed, 22 failed, 23 ignored. The set of failures exactly matches the 22
+previously reproduced with the production fix removed. Integration tests and
+doctests are again not reached after the library failure.
+cargo fmt --all -- --check: passed.
+cargo xtask layers: passed, 31 crates.
+cargo clippy -p photocraft-ui-egui --all-targets -- -D warnings: same existing
+PSD-export drop_non_drop finding. No unrelated source/ruleset changes.
+Wasm was not rerun: the target remains uninstalled, as recorded above.
+This follow-up was checked through actual canvas input frames in the regression;
+the held Alt+Space case was not independently checked in Photoshop or by hand in
+the native app. Earlier ordinary Zoom-menu screenshots/manual checks remain recorded.
