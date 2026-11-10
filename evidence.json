@@ -1,0 +1,27 @@
+{
+  "issue": "https://github.com/storytold/photocraft/issues/12829",
+  "beforeSource": "2a950d64dd848d06d65d4b99a2929485983f93c8",
+  "afterSource": "ca8bc3cb9bd4df2bf32eaabac505da4367ab7b42",
+  "featureSourceIdenticalAt": "9fd70a78bee6854af3fb5598948e4565b1db55ef",
+  "rustc": "1.97.1",
+  "fontsRevision": "b076417b5880bd4154bd22f00695b1d28c6bea83",
+  "logicalSize": [
+    1200,
+    800
+  ],
+  "scale": 1,
+  "pixelDifferenceBounds": {
+    "path": [
+      976,
+      432,
+      1052,
+      465
+    ],
+    "shape": [
+      954,
+      430,
+      1076,
+      468
+    ]
+  }
+}
