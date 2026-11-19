@@ -11,7 +11,8 @@ import tempfile
 
 BASE = "c66a95dee22ee5838bc2b1b6bb92397b45b8a001"
 HEAD = "1383fce1c75768727e4983cfcf98b7fb24780b78"
-REPS = 5
+REPS = 9
+WORKERS = 2
 
 
 def run(args, **kwargs):
@@ -37,9 +38,15 @@ def measure(binary, size, env):
     )
     sample = json.loads(result.stdout.splitlines()[0])
     rss = re.search(r"(\d+)\s+maximum resident set size", result.stderr)
-    if rss is None:
-        raise RuntimeError("no resident memory report from /usr/bin/time -l")
-    return {"ms": sample["ms"], "hash": sample["hash"], "peak_rss_bytes": int(rss.group(1))}
+    cpu = re.search(r"([\d.]+) user\s+([\d.]+) sys", result.stderr)
+    if rss is None or cpu is None:
+        raise RuntimeError("no CPU or resident memory report from /usr/bin/time -l")
+    return {
+        "ms": sample["ms"],
+        "hash": sample["hash"],
+        "peak_rss_bytes": int(rss.group(1)),
+        "cpu_ms": (float(cpu.group(1)) + float(cpu.group(2))) * 1000.0,
+    }
 
 
 def main():
@@ -50,7 +57,7 @@ def main():
     os.chdir(root)
     env = os.environ.copy()
     env.setdefault("CARGO_TARGET_DIR", str(root / "target"))
-    env["RAYON_NUM_THREADS"] = "4"
+    env["RAYON_NUM_THREADS"] = str(WORKERS)
     target = Path(env["CARGO_TARGET_DIR"]).resolve()
     executable = target / "release/examples/bench_remove_targets"
 
@@ -80,6 +87,8 @@ def main():
             rows = []
             for size in ("128x96", "768x512"):
                 results = {"baseline": [], "frontier": []}
+                for binary in (reference, executable):
+                    measure(binary, size, env)
                 for rep in range(REPS):
                     order = [("baseline", reference), ("frontier", executable)]
                     if rep % 2:
@@ -98,7 +107,7 @@ def main():
                     rows.append({"name": f"{size} {name}", "samples_ms": times, "peak_rss_bytes": rss})
 
             options.json.write_text(json.dumps({
-                "base": BASE, "head": HEAD, "discovery": discovery.splitlines(),
+                "base": BASE, "head": HEAD, "workers": WORKERS, "discovery": discovery.splitlines(),
                 "samples": samples, "rows": rows,
             }, indent=2) + "\n")
         finally:
