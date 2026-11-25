@@ -196,6 +196,87 @@ fn gradients_are_approximated_with_a_warning() {
 }
 
 #[test]
+fn radial_gradient_fill_and_stroke_keep_their_svg_appearance() {
+    // Original drawings exercising a transformed fill, an off-centre stroke and object units.
+    let cases = [
+        (
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="48" viewBox="0 0 40 24">
+          <defs><radialGradient id="g" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1"
+            gradientTransform="translate(10 6) rotate(30) scale(8)">
+            <stop offset="0.15" stop-color="red"/><stop offset="0.75" stop-color="blue"/>
+          </radialGradient></defs>
+          <g transform="translate(4 3)">
+            <rect id="gradient" x="2.25" y="2.375" width="22.125" height="15" fill="url(#g)" fill-opacity="0.8"/>
+            <rect id="solid" x="28" y="3" width="6" height="6" fill="lime"/>
+          </g>
+        </svg>"##
+                .as_slice(),
+            photocraft_geom::Rect::new(15, 13, 55, 39),
+        ),
+        (
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="48" viewBox="0 0 40 24">
+          <defs><radialGradient id="g" gradientUnits="userSpaceOnUse" cx="9" cy="10" r="6">
+            <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+          </radialGradient></defs>
+          <g transform="translate(2 1)">
+            <path id="gradient" d="M4 10 H25" fill="none" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+            <rect id="solid" x="28" y="3" width="6" height="6" fill="lime"/>
+          </g>
+        </svg>"##
+                .as_slice(),
+            photocraft_geom::Rect::new(13, 17, 52, 27),
+        ),
+        (
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="48">
+          <defs><radialGradient id="g" cx="25%" cy="70%" r="40%">
+            <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+          </radialGradient></defs>
+          <rect x="8" y="6" width="36" height="36" fill="url(#g)"/>
+          <rect x="64" y="6" width="12" height="12" fill="lime"/>
+        </svg>"##
+                .as_slice(),
+            photocraft_geom::Rect::new(9, 7, 43, 41),
+        ),
+    ];
+    for (svg, interior) in cases {
+        let opened = import("gradients.svg", svg).unwrap();
+        let (width, height, expected) = svg::rasterize_rgba8(svg).unwrap();
+        let actual = photocraft_compose::flatten(&opened.document).to_rgba8();
+        assert_eq!((actual.width, actual.height), (width, height));
+        // Compare interior pixels so the two path renderers' edge coverage is irrelevant.
+        for y in interior.y0..interior.y1 {
+            for x in interior.x0..interior.x1 {
+                let start = 4 * (y as usize * width as usize + x as usize);
+                let actual = &actual.pixels[start..start + 4];
+                let expected = &expected[start..start + 4];
+                assert!(
+                    actual.iter().zip(expected).all(|(&a, &b)| a.abs_diff(b) <= 3),
+                    "the layer composite differs from the SVG at ({x}, {y}): {actual:?} vs {expected:?}"
+                );
+            }
+        }
+        assert_eq!(opened.document.layers.len(), 2);
+        assert!(opened.document.layers.iter().all(|l| matches!(l.content, LayerContent::Shape(_))));
+        assert!(opened.warnings.is_empty(), "{:?}", opened.warnings);
+    }
+}
+
+#[test]
+fn unsupported_radial_gradient_geometry_keeps_a_warning() {
+    for attrs in [r#"gradientTransform="scale(2 1)""#, r#"fx="10%""#, r#"spreadMethod="repeat""#] {
+        let opened = open(&format!(
+            r##"<svg {NS} width="32" height="32">
+              <defs><radialGradient id="g" {attrs}>
+                <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>
+              </radialGradient></defs>
+              <rect width="32" height="32" fill="url(#g)"/>
+            </svg>"##
+        ));
+        assert!(opened.warnings.iter().any(|w| w.contains("radial gradient was approximated")), "{attrs}: {:?}", opened.warnings);
+    }
+}
+
+#[test]
 fn clip_paths_masks_filters_patterns_and_images_are_rasterised() {
     // A clip of one path becomes a vector mask (#4266); one of two shapes is still rasterised.
     let r = open(&format!(

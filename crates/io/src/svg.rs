@@ -6,9 +6,9 @@
 //! images and text. Each path becomes a [`ShapeLayer`] (cubic Bézier knots, fill, stroke) and
 //! each group a layer group with its opacity and blend mode. What the shape model cannot hold,
 //! clip paths, masks, filters, pattern paints and embedded images, is rasterised by `resvg` into
-//! a pixel layer so the picture still looks right, with a warning; gradient paints keep their
-//! stops and direction in the layer's own gradient fill, with a warning that the exact geometry
-//! is not kept.
+//! a pixel layer so the picture still looks right, with a warning. Linear gradients keep their
+//! stops and direction, and circular radial gradients keep their centre and radius. Gradient
+//! geometry the shape model cannot express is approximated with a warning.
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -1499,7 +1499,12 @@ impl Conv {
         if subpaths.is_empty() {
             return None;
         }
-        let fill = p.fill().map(|f| self.paint(f.paint(), f.opacity().get(), ts));
+        let fill_rule = match p.fill().map(|f| f.rule()) {
+            Some(usvg::FillRule::EvenOdd) => FillRule::EvenOdd,
+            _ => FillRule::NonZero,
+        };
+        let path = Path { subpaths, fill_rule, inverted: false };
+        let fill = p.fill().map(|f| self.paint(f.paint(), f.opacity().get(), ts, &path));
         let stroke = p.stroke().map(|s| {
             // Stroke widths are in drawing units; under a non-uniform scale they take the
             // geometric mean, the one width the shape model has.
@@ -1511,7 +1516,7 @@ impl Conv {
             let width = (s.width().get() * k).max(0.01);
             ShapeStroke {
                 width,
-                paint: self.paint(s.paint(), 1.0, ts),
+                paint: self.paint(s.paint(), 1.0, ts, &path),
                 opacity: s.opacity().get(),
                 align: StrokeAlign::Center,
                 cap: match s.linecap() {
@@ -1529,11 +1534,7 @@ impl Conv {
                 dash_offset: s.dashoffset() * k / width,
             }
         });
-        let fill_rule = match p.fill().map(|f| f.rule()) {
-            Some(usvg::FillRule::EvenOdd) => FillRule::EvenOdd,
-            _ => FillRule::NonZero,
-        };
-        let mut sh = ShapeLayer { path: Path { subpaths, fill_rule, inverted: false }, fill, stroke, ..Default::default() };
+        let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
         // The pixel cache is optional, so it is charged like any other retained raster and left
         // out (the shape renders from its path) once the budget is spent: compact geometry can
         // cover the whole canvas in every one of thousands of shapes.
@@ -1560,21 +1561,9 @@ impl Conv {
     }
 
     /// A paint as a layer fill. `ts` maps the paint's space onto the canvas.
-    fn paint(&mut self, paint: &usvg::Paint, opacity: f32, ts: tiny_skia::Transform) -> Fill {
+    fn paint(&mut self, paint: &usvg::Paint, opacity: f32, ts: tiny_skia::Transform, path: &Path) -> Fill {
         let stops = |g: &usvg::BaseGradient| -> Vec<(f32, Color)> {
             g.stops().iter().map(|s| (s.offset().get(), color(s.color(), s.opacity().get() * opacity))).collect()
-        };
-        let gradient = |stops: Vec<(f32, Color)>, angle: f32, style: GradientStyle| Fill::Gradient {
-            stops,
-            angle,
-            scale: 1.0,
-            style,
-            reverse: false,
-            opacity_stops: Vec::new(),
-            midpoints: Vec::new(),
-            offset: (0.0, 0.0),
-            dither: false,
-            align: true,
         };
         match paint {
             usvg::Paint::Color(c) => Fill::Solid(color(*c, opacity)),
@@ -1587,15 +1576,42 @@ impl Conv {
                 gt.map_point(&mut b);
                 // Photoshop's angle: 0° left → right, counter-clockwise positive (y points down).
                 let angle = (-(b.y - a.y)).atan2(b.x - a.x).to_degrees();
-                gradient(stops(g), if angle.is_finite() { angle } else { 0.0 }, GradientStyle::Linear)
+                Fill::gradient(stops(g), if angle.is_finite() { angle } else { 0.0 }, 1.0, GradientStyle::Linear, false)
             }
-            usvg::Paint::RadialGradient(g) => {
-                self.note("gradient", "SVG: gradient paints keep their stops and direction, not their exact geometry".to_string());
-                gradient(stops(g), 0.0, GradientStyle::Radial)
-            }
+            usvg::Paint::RadialGradient(g) => self.radial_gradient(g, stops(g), ts, path),
             // Pattern paints are rasterised before we get here.
             usvg::Paint::Pattern(_) => Fill::Solid(Color::rgba(0.5, 0.5, 0.5, opacity)),
         }
+    }
+
+    fn radial_gradient(&mut self, g: &usvg::RadialGradient, stops: Vec<(f32, Color)>, ts: tiny_skia::Transform, path: &Path) -> Fill {
+        // usvg has already folded gradientUnits into this transform. Apply it before the path's
+        // own transform to put the gradient's centre and axes in the document.
+        let gt = g.transform().post_concat(ts);
+        let mut centre = tiny_skia::Point::from_xy(g.cx(), g.cy());
+        gt.map_point(&mut centre);
+        let (sx, ky, kx, sy) = (f64::from(gt.sx), f64::from(gt.ky), f64::from(gt.kx), f64::from(gt.sy));
+        let (x_axis, y_axis) = (sx.hypot(ky), kx.hypot(sy));
+        let max_axis = x_axis.max(y_axis);
+        let tolerance = max_axis * 1e-5;
+        let circular = (x_axis - y_axis).abs() <= tolerance && (sx * kx + ky * sy).abs() <= tolerance * max_axis;
+
+        // The shape renderer places both fills and strokes in the fractional path frame.
+        let (x0, y0, x1, y1) = path.control_bounds().unwrap_or_default();
+        let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
+        let offset = (((f64::from(centre.x) - x0) / w - 0.5) as f32, ((f64::from(centre.y) - y0) / h - 0.5) as f32);
+        // At zero angle a radial shape fill uses half the frame width as its unscaled radius.
+        let scale = (f64::from(g.r().get()) * (x_axis + y_axis) / w) as f32;
+        let finite = scale.is_finite() && offset.0.is_finite() && offset.1.is_finite();
+        if !finite || scale < 1e-3 || !circular || g.fx() != g.cx() || g.fy() != g.cy() || g.fr().get() > 0.0 || g.spread_method() != usvg::SpreadMethod::Pad {
+            self.note("radial-gradient", "SVG: a radial gradient was approximated to fit the editable shape model".to_string());
+        }
+        let (scale, offset) = if finite { (scale, offset) } else { (1.0, (0.0, 0.0)) };
+        let mut fill = Fill::gradient(stops, 0.0, scale, GradientStyle::Radial, false);
+        if let Fill::Gradient { offset: shift, .. } = &mut fill {
+            *shift = offset;
+        }
+        fill
     }
 
     /// The node rendered by resvg into a pixel layer over its bounding box, clipped to the canvas.
