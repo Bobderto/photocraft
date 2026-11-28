@@ -121,6 +121,9 @@ mod font_picker_tests;
 mod panels_toggle_tests;
 
 #[cfg(test)]
+mod tab_key_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
