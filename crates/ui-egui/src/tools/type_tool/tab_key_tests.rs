@@ -70,3 +70,17 @@ fn tab_toggles_panels_after_commit_or_escape() {
         assert!(panels_shown(&h), "{key:?}: Tab shows the panels again");
     }
 }
+
+#[test]
+fn tab_moves_to_the_next_color_field_without_hiding_panels() {
+    let mut h = harness(Tool::Type);
+    crate::panel_docking::show_panel(h.state_mut(), "color", Some(true)).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::SpinButton, "Red").click();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Red").is_focused());
+
+    tap(&mut h, Key::Tab, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Green").is_focused());
+    assert!(panels_shown(&h));
+}
